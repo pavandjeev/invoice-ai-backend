@@ -1,228 +1,127 @@
-"""
-AI Supplier Support API
-=======================
-A beginner-friendly FastAPI backend for an accounts department
-supplier support system. Uses mock data — no database needed.
+import os
+import threading
+from datetime import datetime
 
-Ready for:
-  - Voiceflow chatbot / Playbooks integration
-  - Telephone / voice agent integration
-  - Railway deployment
-
-Run locally:
-    uvicorn main:app --reload
-    Then open: http://127.0.0.1:8000/docs
-"""
-
+import pandas as pd
+import openpyxl
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
 # ---------------------------------------------------------------------------
-# App setup
+# Setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(
-    title="AI Supplier Support API",
-    description="Handles supplier verification and invoice queries for accounts departments.",
-    version="1.0.0",
-)
+app = FastAPI(title="Supplier Invoice Support API")
 
-# CORS middleware — allows Voiceflow, voice agents, and any frontend to call
-# the API without browser errors.
-# NOTE: allow_credentials must be False when allow_origins is "*".
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Mock data
-# ---------------------------------------------------------------------------
+# Absolute path to the Excel file (works on Railway and locally)
+EXCEL_PATH = os.path.join(os.path.dirname(__file__), "supplier_invoice_test_data_v2.xlsx")
 
-SUPPLIERS = {
-    "SUP001": {
-        "supplier_code": "SUP001",
-        "company_name": "Acme Office Supplies Ltd",
-        "contact_name": "Sarah Johnson",
-        "email": "accounts@acmeoffice.co.uk",
-    },
-    "SUP002": {
-        "supplier_code": "SUP002",
-        "company_name": "FastPrint Solutions",
-        "contact_name": "David Okafor",
-        "email": "billing@fastprint.co.uk",
-    },
-    "SUP003": {
-        "supplier_code": "SUP003",
-        "company_name": "Green Facilities Management",
-        "contact_name": "Priya Patel",
-        "email": "finance@greenfm.co.uk",
-    },
-}
+# Thread lock so only one request writes to Excel at a time
+write_lock = threading.Lock()
 
-# Invoice statuses: "paid" | "unpaid" | "processing"
-INVOICES = {
-    # --- Acme Office Supplies ---
-    "INV-1001": {
-        "invoice_number": "INV-1001",
-        "supplier_code": "SUP001",
-        "amount": 1250.00,
-        "currency": "GBP",
-        "status": "paid",
-        "issue_date": "2025-03-01",
-        "due_date": "2025-03-31",
-        "payment_date": "2025-03-28",
-        "description": "Office stationery, March 2025",
-    },
-    "INV-1002": {
-        "invoice_number": "INV-1002",
-        "supplier_code": "SUP001",
-        "amount": 875.50,
-        "currency": "GBP",
-        "status": "unpaid",
-        "issue_date": "2025-04-01",
-        "due_date": "2025-04-30",
-        "payment_date": None,
-        "description": "Printer cartridges, April 2025",
-    },
-    "INV-1003": {
-        "invoice_number": "INV-1003",
-        "supplier_code": "SUP001",
-        "amount": 430.00,
-        "currency": "GBP",
-        "status": "processing",
-        "issue_date": "2025-05-01",
-        "due_date": "2025-05-31",
-        "payment_date": None,
-        "description": "Desk accessories, May 2025",
-    },
-    # --- FastPrint Solutions ---
-    "INV-2001": {
-        "invoice_number": "INV-2001",
-        "supplier_code": "SUP002",
-        "amount": 3400.00,
-        "currency": "GBP",
-        "status": "paid",
-        "issue_date": "2025-02-15",
-        "due_date": "2025-03-15",
-        "payment_date": "2025-03-10",
-        "description": "Brochure print run, February 2025",
-    },
-    "INV-2002": {
-        "invoice_number": "INV-2002",
-        "supplier_code": "SUP002",
-        "amount": 1980.00,
-        "currency": "GBP",
-        "status": "unpaid",
-        "issue_date": "2025-04-10",
-        "due_date": "2025-05-10",
-        "payment_date": None,
-        "description": "Letterhead and envelope stock, April 2025",
-    },
-    "INV-2003": {
-        "invoice_number": "INV-2003",
-        "supplier_code": "SUP002",
-        "amount": 760.00,
-        "currency": "GBP",
-        "status": "unpaid",
-        "issue_date": "2025-05-01",
-        "due_date": "2025-05-31",
-        "payment_date": None,
-        "description": "Poster printing, May 2025",
-    },
-    # --- Green Facilities Management ---
-    "INV-3001": {
-        "invoice_number": "INV-3001",
-        "supplier_code": "SUP003",
-        "amount": 5200.00,
-        "currency": "GBP",
-        "status": "paid",
-        "issue_date": "2025-01-01",
-        "due_date": "2025-01-31",
-        "payment_date": "2025-01-29",
-        "description": "Cleaning services, January 2025",
-    },
-    "INV-3002": {
-        "invoice_number": "INV-3002",
-        "supplier_code": "SUP003",
-        "amount": 5200.00,
-        "currency": "GBP",
-        "status": "processing",
-        "issue_date": "2025-04-01",
-        "due_date": "2025-04-30",
-        "payment_date": None,
-        "description": "Cleaning services, April 2025",
-    },
-    "INV-3003": {
-        "invoice_number": "INV-3003",
-        "supplier_code": "SUP003",
-        "amount": 320.00,
-        "currency": "GBP",
-        "status": "unpaid",
-        "issue_date": "2025-05-01",
-        "due_date": "2025-05-31",
-        "payment_date": None,
-        "description": "Window cleaning, May 2025",
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Helper utilities
-# ---------------------------------------------------------------------------
-
-def get_supplier_invoices(supplier_code: str) -> list:
-    """Return all invoices belonging to a supplier."""
-    return [inv for inv in INVOICES.values() if inv["supplier_code"] == supplier_code]
-
-
-def format_currency(amount: float, currency: str = "GBP") -> str:
-    """Format a number as a currency string."""
-    symbol = "£" if currency == "GBP" else f"{currency} "
-    return f"{symbol}{amount:,.2f}"
-
-
-def status_phrase(status: str) -> str:
-    """Return a human-friendly, TTS-safe status sentence."""
-    return {
-        "paid": "has been paid",
-        "unpaid": "is currently unpaid",
-        "processing": "is currently being processed for payment",
-    }.get(status, status)
+# Statuses that count as "unpaid" for this system
+UNPAID_STATUSES = {"unpaid", "overdue", "processing"}
 
 
 # ---------------------------------------------------------------------------
-# Pydantic request models
+# Helper functions
 # ---------------------------------------------------------------------------
 
-class SupplierVerifyRequest(BaseModel):
+def normalize(value: str) -> str:
+    """Strip whitespace and convert to uppercase."""
+    return str(value).strip().upper()
+
+
+def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Lowercase column names and strip whitespace."""
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    return df
+
+
+def load_suppliers() -> pd.DataFrame:
+    df = pd.read_excel(EXCEL_PATH, sheet_name="Suppliers", dtype=str)
+    df = clean_columns(df)
+    df["supplier_code"] = df["supplier_code"].apply(normalize)
+    return df
+
+
+def load_invoices() -> pd.DataFrame:
+    df = pd.read_excel(EXCEL_PATH, sheet_name="Invoices", dtype=str)
+    df = clean_columns(df)
+    df["supplier_code"] = df["supplier_code"].apply(normalize)
+    df["invoice_number"] = df["invoice_number"].apply(normalize)
+    df["status"] = df["status"].str.strip().str.lower()
+    return df
+
+
+def load_queries() -> pd.DataFrame:
+    df = pd.read_excel(EXCEL_PATH, sheet_name="Queries", dtype=str)
+    df = clean_columns(df)
+    return df
+
+
+def find_supplier(supplier_code: str) -> dict | None:
+    """Return the supplier row as a dict, or None if not found."""
+    suppliers = load_suppliers()
+    match = suppliers[suppliers["supplier_code"] == normalize(supplier_code)]
+    if match.empty:
+        return None
+    return match.iloc[0].to_dict()
+
+
+def find_invoice(supplier_code: str, invoice_number: str) -> dict | None:
+    """Return an invoice row filtered by BOTH supplier_code and invoice_number."""
+    invoices = load_invoices()
+    match = invoices[
+        (invoices["supplier_code"] == normalize(supplier_code)) &
+        (invoices["invoice_number"] == normalize(invoice_number))
+    ]
+    if match.empty:
+        return None
+    return match.iloc[0].to_dict()
+
+
+def append_query_to_excel(supplier_code: str, invoice_number: str,
+                           query_message: str) -> None:
+    """Append a new row to the Queries sheet using openpyxl (thread-safe)."""
+    with write_lock:
+        wb = openpyxl.load_workbook(EXCEL_PATH)
+        ws = wb["Queries"]
+        ws.append([
+            normalize(supplier_code),
+            normalize(invoice_number),
+            query_message.strip(),
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "open",
+        ])
+        wb.save(EXCEL_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+class SupplierRequest(BaseModel):
     supplier_code: str
 
-class InvoiceStatusRequest(BaseModel):
+class InvoiceRequest(BaseModel):
     supplier_code: str
     invoice_number: str
 
-class PaymentDateRequest(BaseModel):
-    supplier_code: str
-    invoice_number: str
-
-class UnpaidInvoicesCountRequest(BaseModel):
-    supplier_code: str
-
-class UnpaidInvoicesRequest(BaseModel):
-    supplier_code: str
-
-class RaiseQueryRequest(BaseModel):
+class QueryRequest(BaseModel):
     supplier_code: str
     invoice_number: str
     query_message: str
 
 class GeneralQuestionRequest(BaseModel):
-    supplier_code: Optional[str] = None
     question: str
 
 
@@ -232,388 +131,337 @@ class GeneralQuestionRequest(BaseModel):
 
 @app.get("/")
 def root():
-    """Health check — confirms the API is running."""
     return {
         "status": "ok",
-        "display_message": (
-            "Welcome to the AI Supplier Support API. "
-            "The service is up and running. "
-            "Please use the correct endpoint for your request."
-        ),
-        "available_endpoints": [
-            "POST /verify-supplier",
-            "POST /invoice-status",
-            "POST /payment-date",
-            "POST /unpaid-invoices-count",
-            "POST /unpaid-invoices",
-            "POST /raise-query",
-            "POST /general-question",
-        ],
+        "display_message": "Supplier Invoice Support API is running.",
     }
 
 
 @app.post("/verify-supplier")
-def verify_supplier(body: SupplierVerifyRequest):
-    """
-    Verify a supplier by their supplier code.
-    This should be the first call before any other query.
-    """
-    code = body.supplier_code.strip().upper()
-    supplier = SUPPLIERS.get(code)
+def verify_supplier(req: SupplierRequest):
+    """Check whether a supplier code exists in the Suppliers sheet."""
+    supplier = find_supplier(req.supplier_code)
 
     if not supplier:
         return {
             "verified": False,
+            "supplier_code": normalize(req.supplier_code),
             "display_message": (
-                f"Sorry, I could not find a supplier with the code {body.supplier_code}. "
-                "Please check your supplier code and try again, "
-                "or contact the accounts team for assistance."
+                f"I could not find a supplier with code {normalize(req.supplier_code).upper()}. "
+                "Please double-check the code and try again."
             ),
         }
 
     return {
         "verified": True,
         "supplier_code": supplier["supplier_code"],
-        "company_name": supplier["company_name"],
-        "contact_name": supplier["contact_name"],
+        "supplier_name": supplier.get("supplier_name", ""),
         "display_message": (
-            f"Thank you, I have verified your account. "
-            f"Welcome, {supplier['contact_name']} from {supplier['company_name']}. "
-            "How can I help you today?"
+            f"Supplier verified: {supplier.get('supplier_name', '')} "
+            f"({supplier['supplier_code']})."
         ),
     }
 
 
 @app.post("/invoice-status")
-def invoice_status(body: InvoiceStatusRequest):
+def invoice_status(req: InvoiceRequest):
     """Return the current status of a specific invoice."""
-    code = body.supplier_code.strip().upper()
-    inv_num = body.invoice_number.strip().upper()
-
-    if code not in SUPPLIERS:
+    # Verify supplier first
+    if not find_supplier(req.supplier_code):
         return {
             "found": False,
             "display_message": (
-                f"Supplier code {body.supplier_code} was not recognised. "
-                "Please verify your supplier code first."
+                f"Supplier code {normalize(req.supplier_code)} was not recognised. "
+                "Please verify your supplier code."
             ),
         }
 
-    invoice = INVOICES.get(inv_num)
+    invoice = find_invoice(req.supplier_code, req.invoice_number)
 
     if not invoice:
         return {
             "found": False,
             "display_message": (
-                f"I could not find invoice {body.invoice_number}. "
-                "Please check the invoice number and try again."
+                f"Invoice {normalize(req.invoice_number)} was not found for supplier "
+                f"{normalize(req.supplier_code)}. Please check the invoice number."
             ),
         }
 
-    if invoice["supplier_code"] != code:
-        return {
-            "found": False,
-            "display_message": (
-                f"Invoice {body.invoice_number} does not appear to be linked to your account. "
-                "Please contact the accounts team if you believe this is an error."
-            ),
-        }
+    status = invoice.get("status", "unknown")
+    amount = invoice.get("amount", "N/A")
 
-    amount_str = format_currency(invoice["amount"], invoice["currency"])
-    payment_note = (
-        f" Payment was made on {invoice['payment_date']}."
-        if invoice["payment_date"]
-        else ""
+    status_messages = {
+        "paid":       f"Invoice {invoice['invoice_number']} has been paid. Amount: £{amount}.",
+        "unpaid":     f"Invoice {invoice['invoice_number']} is currently unpaid. Amount due: £{amount}.",
+        "processing": f"Invoice {invoice['invoice_number']} is being processed. Amount: £{amount}.",
+        "overdue":    f"Invoice {invoice['invoice_number']} is overdue. Amount outstanding: £{amount}. I recommend raising a query so the accounts team can review this.",
+        "on-hold":    f"Invoice {invoice['invoice_number']} is currently on hold. Amount: £{amount}. Please contact us for more information.",
+    }
+
+    display = status_messages.get(
+        status,
+        f"Invoice {invoice['invoice_number']} has status '{status}'. Amount: £{amount}.",
     )
 
     return {
         "found": True,
         "invoice_number": invoice["invoice_number"],
-        "status": invoice["status"],
-        "amount": invoice["amount"],
-        "currency": invoice["currency"],
-        "due_date": invoice["due_date"],
-        "payment_date": invoice["payment_date"],
-        "description": invoice["description"],
-        "display_message": (
-            f"Invoice {invoice['invoice_number']} for {amount_str}, "
-            f"{invoice['description']}, {status_phrase(invoice['status'])}. "
-            f"The due date is {invoice['due_date']}."
-            f"{payment_note}"
-        ),
-    }
-
-
-@app.post("/payment-date")
-def payment_date(body: PaymentDateRequest):
-    """Return the payment date, or the due date if not yet paid."""
-    code = body.supplier_code.strip().upper()
-    inv_num = body.invoice_number.strip().upper()
-
-    if code not in SUPPLIERS:
-        return {
-            "found": False,
-            "display_message": (
-                f"Supplier code {body.supplier_code} was not recognised. "
-                "Please verify your supplier code first."
-            ),
-        }
-
-    invoice = INVOICES.get(inv_num)
-
-    if not invoice or invoice["supplier_code"] != code:
-        return {
-            "found": False,
-            "display_message": (
-                f"I could not find invoice {body.invoice_number} on your account. "
-                "Please check the invoice number and try again."
-            ),
-        }
-
-    if invoice["payment_date"]:
-        return {
-            "found": True,
-            "invoice_number": invoice["invoice_number"],
-            "status": invoice["status"],
-            "payment_date": invoice["payment_date"],
-            "display_message": (
-                f"Invoice {invoice['invoice_number']} was paid on {invoice['payment_date']}."
-            ),
-        }
-
-    if invoice["status"] == "processing":
-        return {
-            "found": True,
-            "invoice_number": invoice["invoice_number"],
-            "status": invoice["status"],
-            "payment_date": None,
-            "due_date": invoice["due_date"],
-            "display_message": (
-                f"Invoice {invoice['invoice_number']} is currently being processed for payment. "
-                f"The due date is {invoice['due_date']}. "
-                "Payment will be made on or before this date."
-            ),
-        }
-
-    return {
-        "found": True,
-        "invoice_number": invoice["invoice_number"],
-        "status": invoice["status"],
-        "payment_date": None,
-        "due_date": invoice["due_date"],
-        "display_message": (
-            f"Invoice {invoice['invoice_number']} has not been paid yet. "
-            f"The payment due date is {invoice['due_date']}. "
-            "If you have not received payment by this date, please raise a query."
-        ),
-    }
-
-
-@app.post("/unpaid-invoices-count")
-def unpaid_invoices_count(body: UnpaidInvoicesCountRequest):
-    """Return the total number of outstanding invoices for a supplier."""
-    code = body.supplier_code.strip().upper()
-
-    if code not in SUPPLIERS:
-        return {
-            "found": False,
-            "display_message": (
-                f"Supplier code {body.supplier_code} was not recognised. "
-                "Please verify your supplier code first."
-            ),
-        }
-
-    supplier = SUPPLIERS[code]
-    all_invoices = get_supplier_invoices(code)
-    unpaid = [inv for inv in all_invoices if inv["status"] == "unpaid"]
-    processing = [inv for inv in all_invoices if inv["status"] == "processing"]
-    total_outstanding = len(unpaid) + len(processing)
-
-    if total_outstanding == 0:
-        message = (
-            f"Great news. {supplier['company_name']} has no outstanding invoices at this time. "
-            "All invoices have been paid."
-        )
-    elif total_outstanding == 1:
-        message = (
-            f"{supplier['company_name']} currently has 1 outstanding invoice. "
-            f"That is {len(unpaid)} unpaid and {len(processing)} being processed."
-        )
-    else:
-        message = (
-            f"{supplier['company_name']} currently has {total_outstanding} outstanding invoices. "
-            f"That is {len(unpaid)} unpaid and {len(processing)} being processed."
-        )
-
-    return {
-        "found": True,
-        "company_name": supplier["company_name"],
-        "unpaid_count": len(unpaid),
-        "processing_count": len(processing),
-        "total_outstanding": total_outstanding,
-        "display_message": message,
-    }
-
-
-@app.post("/unpaid-invoices")
-def unpaid_invoices(body: UnpaidInvoicesRequest):
-    """Return the full list of unpaid and processing invoices for a supplier."""
-    code = body.supplier_code.strip().upper()
-
-    if code not in SUPPLIERS:
-        return {
-            "found": False,
-            "display_message": (
-                f"Supplier code {body.supplier_code} was not recognised. "
-                "Please verify your supplier code first."
-            ),
-        }
-
-    supplier = SUPPLIERS[code]
-    all_invoices = get_supplier_invoices(code)
-    outstanding = [inv for inv in all_invoices if inv["status"] in ("unpaid", "processing")]
-
-    if not outstanding:
-        return {
-            "found": True,
-            "company_name": supplier["company_name"],
-            "invoices": [],
-            "display_message": (
-                f"There are no outstanding invoices for {supplier['company_name']} at this time. "
-                "All invoices have been paid."
-            ),
-        }
-
-    summaries = []
-    for inv in outstanding:
-        amount_str = format_currency(inv["amount"], inv["currency"])
-        summaries.append(
-            f"Invoice {inv['invoice_number']} for {amount_str}, "
-            f"due {inv['due_date']}, status {inv['status']}"
-        )
-
-    display = (
-        f"Here are the outstanding invoices for {supplier['company_name']}. "
-        + ". ".join(summaries) + "."
-    )
-
-    return {
-        "found": True,
-        "company_name": supplier["company_name"],
-        "invoices": outstanding,
+        "supplier_code": invoice["supplier_code"],
+        "status": status,
+        "amount": amount,
         "display_message": display,
     }
 
 
-@app.post("/raise-query")
-def raise_query(body: RaiseQueryRequest):
-    """
-    Allow a supplier to raise a query about a specific invoice.
-    Logs the query to the console.
-    In production: connect to SendGrid email or a database.
-    """
-    code = body.supplier_code.strip().upper()
-    inv_num = body.invoice_number.strip().upper()
-
-    if code not in SUPPLIERS:
+@app.post("/payment-date")
+def payment_date(req: InvoiceRequest):
+    """Return the payment date or due date for an invoice."""
+    if not find_supplier(req.supplier_code):
         return {
-            "submitted": False,
+            "found": False,
             "display_message": (
-                f"Supplier code {body.supplier_code} was not recognised. "
-                "Please verify your supplier code first."
+                f"Supplier code {normalize(req.supplier_code)} was not recognised."
             ),
         }
 
-    invoice = INVOICES.get(inv_num)
+    invoice = find_invoice(req.supplier_code, req.invoice_number)
 
-    if not invoice or invoice["supplier_code"] != code:
+    if not invoice:
         return {
-            "submitted": False,
+            "found": False,
             "display_message": (
-                f"I could not find invoice {body.invoice_number} on your account. "
-                "Please check the invoice number and try again."
+                f"Invoice {normalize(req.invoice_number)} was not found for supplier "
+                f"{normalize(req.supplier_code)}."
             ),
         }
 
-    supplier = SUPPLIERS[code]
+    status = invoice.get("status", "unknown")
+    payment_date_val = invoice.get("payment_date", "")
+    due_date_val = invoice.get("due_date", "")
+    inv_num = invoice["invoice_number"]
 
-    print(
-        f"\n[QUERY RECEIVED]\n"
-        f"  Supplier : {supplier['company_name']} ({code})\n"
-        f"  Invoice  : {inv_num}\n"
-        f"  Message  : {body.query_message}\n"
+    # Clean up date values (pandas may return 'nan' strings)
+    def clean_date(val):
+        if not val or str(val).strip().lower() in ("nan", "none", ""):
+            return None
+        return str(val).strip()
+
+    payment_date_clean = clean_date(payment_date_val)
+    due_date_clean = clean_date(due_date_val)
+
+    if status == "paid":
+        if payment_date_clean:
+            msg = f"Invoice {inv_num} was paid on {payment_date_clean}."
+        else:
+            msg = f"Invoice {inv_num} has been paid, but no payment date is recorded."
+
+    elif status == "overdue":
+        if due_date_clean:
+            msg = (
+                f"Invoice {inv_num} was due on {due_date_clean} and is now overdue. "
+                "I recommend raising a query so the accounts team can review this."
+            )
+        else:
+            msg = (
+                f"Invoice {inv_num} is overdue. "
+                "I recommend raising a query so the accounts team can review this."
+            )
+
+    elif status == "unpaid":
+        if due_date_clean:
+            msg = f"Invoice {inv_num} is unpaid. Payment is due by {due_date_clean}."
+        else:
+            msg = f"Invoice {inv_num} is unpaid. Please contact us for payment terms."
+
+    elif status == "processing":
+        if due_date_clean:
+            msg = (
+                f"Invoice {inv_num} is currently being processed. "
+                f"Payment is expected by {due_date_clean}."
+            )
+        else:
+            msg = f"Invoice {inv_num} is currently being processed. A payment date will be confirmed shortly."
+
+    elif status == "on-hold":
+        msg = (
+            f"Invoice {inv_num} is on hold. "
+            "Please contact our accounts team for further information."
+        )
+
+    else:
+        msg = (
+            f"Invoice {inv_num} has status '{status}'. "
+            f"Due date: {due_date_clean or 'not recorded'}."
+        )
+
+    return {
+        "found": True,
+        "invoice_number": inv_num,
+        "status": status,
+        "payment_date": payment_date_clean,
+        "due_date": due_date_clean,
+        "display_message": msg,
+    }
+
+
+@app.post("/unpaid-invoices-count")
+def unpaid_invoices_count(req: SupplierRequest):
+    """Return the number of unpaid/overdue/processing invoices for a supplier."""
+    if not find_supplier(req.supplier_code):
+        return {
+            "found": False,
+            "display_message": (
+                f"Supplier code {normalize(req.supplier_code)} was not recognised."
+            ),
+        }
+
+    invoices = load_invoices()
+    supplier_invoices = invoices[
+        invoices["supplier_code"] == normalize(req.supplier_code)
+    ]
+    unpaid = supplier_invoices[supplier_invoices["status"].isin(UNPAID_STATUSES)]
+    count = len(unpaid)
+
+    if count == 0:
+        msg = f"There are no outstanding invoices for supplier {normalize(req.supplier_code)}."
+    elif count == 1:
+        msg = f"There is 1 outstanding invoice for supplier {normalize(req.supplier_code)}."
+    else:
+        msg = f"There are {count} outstanding invoices for supplier {normalize(req.supplier_code)}."
+
+    return {
+        "found": True,
+        "supplier_code": normalize(req.supplier_code),
+        "unpaid_count": count,
+        "display_message": msg,
+    }
+
+
+@app.post("/unpaid-invoices")
+def unpaid_invoices(req: SupplierRequest):
+    """Return the full list of unpaid/overdue/processing invoices for a supplier."""
+    if not find_supplier(req.supplier_code):
+        return {
+            "found": False,
+            "display_message": (
+                f"Supplier code {normalize(req.supplier_code)} was not recognised."
+            ),
+        }
+
+    invoices = load_invoices()
+    supplier_invoices = invoices[
+        invoices["supplier_code"] == normalize(req.supplier_code)
+    ]
+    unpaid = supplier_invoices[supplier_invoices["status"].isin(UNPAID_STATUSES)]
+
+    if unpaid.empty:
+        return {
+            "found": True,
+            "supplier_code": normalize(req.supplier_code),
+            "unpaid_invoices": [],
+            "display_message": (
+                f"There are no outstanding invoices for supplier {normalize(req.supplier_code)}."
+            ),
+        }
+
+    results = []
+    lines = []
+    for _, row in unpaid.iterrows():
+        status = row.get("status", "unknown")
+        status_label = "overdue" if status == "overdue" else status
+        results.append({
+            "invoice_number": row.get("invoice_number", ""),
+            "status": status,
+            "amount": row.get("amount", ""),
+            "due_date": row.get("due_date", ""),
+        })
+        lines.append(
+            f"• {row.get('invoice_number','')} — {status_label.capitalize()}, "
+            f"£{row.get('amount','N/A')}, due {row.get('due_date','N/A')}"
+        )
+
+    summary = (
+        f"Outstanding invoices for {normalize(req.supplier_code)} "
+        f"({len(results)} total):\n" + "\n".join(lines)
     )
 
     return {
-        "submitted": True,
-        "supplier_code": code,
-        "invoice_number": inv_num,
-        "query_message": body.query_message,
+        "found": True,
+        "supplier_code": normalize(req.supplier_code),
+        "unpaid_invoices": results,
+        "display_message": summary,
+    }
+
+
+@app.post("/raise-query")
+def raise_query(req: QueryRequest):
+    """Log a new query against an invoice in the Queries sheet."""
+    if not find_supplier(req.supplier_code):
+        return {
+            "success": False,
+            "display_message": (
+                f"Supplier code {normalize(req.supplier_code)} was not recognised. "
+                "Query was not submitted."
+            ),
+        }
+
+    invoice = find_invoice(req.supplier_code, req.invoice_number)
+    if not invoice:
+        return {
+            "success": False,
+            "display_message": (
+                f"Invoice {normalize(req.invoice_number)} was not found for supplier "
+                f"{normalize(req.supplier_code)}. Query was not submitted."
+            ),
+        }
+
+    if not req.query_message.strip():
+        return {
+            "success": False,
+            "display_message": "Query message cannot be empty. Please provide details.",
+        }
+
+    try:
+        append_query_to_excel(req.supplier_code, req.invoice_number, req.query_message)
+    except Exception as e:
+        return {
+            "success": False,
+            "display_message": (
+                "There was a problem saving your query. Please try again later."
+            ),
+        }
+
+    return {
+        "success": True,
+        "supplier_code": normalize(req.supplier_code),
+        "invoice_number": normalize(req.invoice_number),
         "display_message": (
-            f"Thank you, {supplier['contact_name']}. "
-            f"Your query about invoice {inv_num} has been submitted to the accounts team. "
-            "A member of the team will be in touch within 2 business days. "
-            "Is there anything else I can help you with?"
+            f"Your query for invoice {normalize(req.invoice_number)} has been submitted successfully. "
+            "Our team will review it and get back to you."
         ),
     }
 
 
 @app.post("/general-question")
-def general_question(body: GeneralQuestionRequest):
+def general_question(req: GeneralQuestionRequest):
     """
-    Answer common supplier questions using keyword matching.
-    Replace with an LLM call or knowledge base in production.
+    Catch-all endpoint for general questions.
+    Returns a helpful fallback message directing the user to specific endpoints.
     """
-    q = body.question.lower()
-
-    if any(kw in q for kw in ["payment term", "terms", "how long", "when do you pay"]):
-        answer = (
-            "Our standard payment terms are 30 days from the date of a valid invoice. "
-            "Some suppliers have agreed 60-day terms. "
-            "Please check your supplier agreement for details."
-        )
-    elif any(kw in q for kw in ["remittance", "remit"]):
-        answer = (
-            "Remittance advice is sent to your registered email address on the day payment is made. "
-            "If you have not received one, please check your spam folder or raise a query."
-        )
-    elif any(kw in q for kw in ["contact", "phone", "email", "speak to someone", "human"]):
-        answer = (
-            "You can contact the accounts payable team by email at ap@company.co.uk, "
-            "or by phone on 0800 123 4567, Monday to Friday, 9am to 5pm."
-        )
-    elif any(kw in q for kw in ["bank", "sort code", "account number", "bank details"]):
-        answer = (
-            "For security reasons, bank account details cannot be provided or changed through this service. "
-            "Please contact the accounts team directly on 0800 123 4567."
-        )
-    elif any(kw in q for kw in ["dispute", "wrong amount", "incorrect", "overcharged"]):
-        answer = (
-            "If you believe an invoice amount is incorrect, please use the raise a query option "
-            "with your invoice number and a description of the issue. "
-            "Our team will investigate and respond within 2 business days."
-        )
-    elif any(kw in q for kw in ["statement", "account statement"]):
-        answer = (
-            "Supplier account statements are sent quarterly. "
-            "If you need an urgent statement, please contact the accounts team by email."
-        )
-    elif any(kw in q for kw in ["late", "overdue", "not received payment"]):
-        answer = (
-            "If a payment is overdue, please raise a query using your invoice number "
-            "and we will investigate as a priority. "
-            "You can also call us on 0800 123 4567."
-        )
-    else:
-        answer = (
-            "Thank you for your question. I am not able to answer that automatically, "
-            "but a member of the accounts team will be happy to help. "
-            "Please contact us at ap@company.co.uk or call 0800 123 4567, "
-            "Monday to Friday, 9am to 5pm."
-        )
+    question = req.question.strip()
 
     return {
-        "question": body.question,
-        "display_message": answer,
+        "received": True,
+        "question": question,
+        "display_message": (
+            "Thank you for your question. "
+            "I can help you with the following:\n"
+            "• Verify a supplier\n"
+            "• Check invoice status\n"
+            "• Look up a payment or due date\n"
+            "• List outstanding invoices\n"
+            "• Raise a query against an invoice\n\n"
+            "Please provide your supplier code and, where relevant, your invoice number "
+            "so I can assist you further."
+        ),
     }
-
