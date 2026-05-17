@@ -32,7 +32,6 @@ app = FastAPI(
 # CORS middleware — allows Voiceflow, voice agents, and any frontend to call
 # the API without browser errors.
 # NOTE: allow_credentials must be False when allow_origins is "*".
-#       Using both together violates the CORS spec and browsers will block it.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,7 +41,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Mock data — replace with a database when ready
+# Mock data
 # ---------------------------------------------------------------------------
 
 SUPPLIERS = {
@@ -67,7 +66,6 @@ SUPPLIERS = {
 }
 
 # Invoice statuses: "paid" | "unpaid" | "processing"
-# Descriptions use plain commas (no em-dashes) so TTS reads them cleanly.
 INVOICES = {
     # --- Acme Office Supplies ---
     "INV-1001": {
@@ -397,7 +395,6 @@ def payment_date(body: PaymentDateRequest):
             ),
         }
 
-    # Status is "unpaid"
     return {
         "found": True,
         "invoice_number": invoice["invoice_number"],
@@ -487,7 +484,6 @@ def unpaid_invoices(body: UnpaidInvoicesRequest):
             ),
         }
 
-    # Build a voice-friendly summary — plain commas, no special characters
     summaries = []
     for inv in outstanding:
         amount_str = format_currency(inv["amount"], inv["currency"])
@@ -513,8 +509,8 @@ def unpaid_invoices(body: UnpaidInvoicesRequest):
 def raise_query(body: RaiseQueryRequest):
     """
     Allow a supplier to raise a query about a specific invoice.
-    The query is printed to the console for now.
-    In production: save to a database, send an email, or open a support ticket.
+    Logs the query to the console.
+    In production: connect to SendGrid email or a database.
     """
     code = body.supplier_code.strip().upper()
     inv_num = body.invoice_number.strip().upper()
@@ -541,7 +537,6 @@ def raise_query(body: RaiseQueryRequest):
 
     supplier = SUPPLIERS[code]
 
-    # Log the query to the console (replace with DB / email in production)
     print(
         f"\n[QUERY RECEIVED]\n"
         f"  Supplier : {supplier['company_name']} ({code})\n"
@@ -621,3 +616,4 @@ def general_question(body: GeneralQuestionRequest):
         "question": body.question,
         "display_message": answer,
     }
+
